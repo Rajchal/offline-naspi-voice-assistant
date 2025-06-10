@@ -398,8 +398,8 @@ class VoiceAssistant:
                 )
                 if result.returncode == 0:
                     response = result.stdout.strip()
-                    # Remove <think>...</think> tags and their content from the response
-                    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
+                    # Remove text from "Thinking" up to and including "done thinking."
+                    response = re.sub(r'Thinking.*?done thinking\.', '', response, flags=re.DOTALL).strip()
                     return response if response else None
                 else:
                     self.logger.warning(f"Ollama error (attempt {attempt + 1}): {result.stderr}")
