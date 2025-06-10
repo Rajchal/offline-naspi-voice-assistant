@@ -10,10 +10,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
 from queue import Queue
-
+import re
 try:
     import pyaudio
     import pvporcupine
+
 except ImportError as e:
     print(f"Missing required dependencies: {e}")
     print("Install with: pip3 install pyaudio pvporcupine")
@@ -388,15 +389,17 @@ class VoiceAssistant:
         retry_delay = 1
         for attempt in range(max_retries):
             try:
-                cmd = ['ollama', 'run', 'qwen3:0.6b', f'/no_think {question}']
+                cmd = ['ollama', 'run', 'qwen3:0.6b', question]
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
                     text=True,
-                    timeout=30
+                    timeout=60
                 )
                 if result.returncode == 0:
                     response = result.stdout.strip()
+                    # Remove <think>...</think> tags and their content from the response
+                    response = re.sub(r'<think>.*?</think>', '', response, flags=re.DOTALL).strip()
                     return response if response else None
                 else:
                     self.logger.warning(f"Ollama error (attempt {attempt + 1}): {result.stderr}")
