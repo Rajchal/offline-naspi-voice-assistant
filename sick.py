@@ -388,7 +388,7 @@ class VoiceAssistant:
         retry_delay = 1
         for attempt in range(max_retries):
             try:
-                cmd = ['ollama', 'run', 'qwen3:0.6b', question]
+                cmd = ['ollama', 'run', 'qwen3:0.6b', f'/no_think {question}']
                 result = subprocess.run(
                     cmd,
                     capture_output=True,
