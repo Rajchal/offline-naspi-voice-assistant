@@ -393,7 +393,7 @@ class VoiceAssistant:
                 OLLAMA_MODEL = "qwen3:0.6b"
                 payload = {
                     "model": OLLAMA_MODEL,
-                    "prompt": f'/no_think {question}',
+                    "prompt": f'Answer briefly and directly: {question}',
                     "num_predict": 50,  # shorter, faster
                     "stream": False
                 }
@@ -406,7 +406,8 @@ class VoiceAssistant:
                 data = response.json()
                 answer = data.get("response", "").strip()
                 # Remove text from "Thinking" up to and including "done thinking."
-                answer = re.sub(r'Thinking.*?done thinking\.', '', answer, flags=re.DOTALL).strip()
+                # Remove everything inside <think>...</think> tags
+                answer = re.sub(r'<think>.*?</think>', '', answer, flags=re.DOTALL).strip()
                 return answer if answer else None
             except requests.exceptions.RequestException as e:
                 self.logger.warning(f"Ollama API error (attempt {attempt + 1}): {e}")
