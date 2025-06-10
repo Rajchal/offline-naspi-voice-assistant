@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Optional, List
 from queue import Queue
 import re
+import requests
 try:
     import pyaudio
     import pvporcupine
-
 except ImportError as e:
     print(f"Missing required dependencies: {e}")
     print("Install with: pip3 install pyaudio pvporcupine")
@@ -389,22 +389,27 @@ class VoiceAssistant:
         retry_delay = 1
         for attempt in range(max_retries):
             try:
-                cmd = ['ollama', 'run', 'qwen3:0.6b', question]
-                result = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=60
+                OLLAMA_HOST = "http://localhost:11434"
+                OLLAMA_MODEL = "qwen3:0.6b"
+                payload = {
+                    "model": OLLAMA_MODEL,
+                    "prompt": question,
+                    "num_predict": 50,  # shorter, faster
+                    "stream": False
+                }
+                response = requests.post(
+                    f"{OLLAMA_HOST}/api/generate",
+                    json=payload,
+                    timeout=90
                 )
-                if result.returncode == 0:
-                    response = result.stdout.strip()
-                    # Remove text from "Thinking" up to and including "done thinking."
-                    response = re.sub(r'Thinking.*?done thinking\.', '', response, flags=re.DOTALL).strip()
-                    return response if response else None
-                else:
-                    self.logger.warning(f"Ollama error (attempt {attempt + 1}): {result.stderr}")
-            except subprocess.TimeoutExpired:
-                self.logger.warning(f"Ollama timeout (attempt {attempt + 1})")
+                response.raise_for_status()
+                data = response.json()
+                answer = data.get("response", "").strip()
+                # Remove text from "Thinking" up to and including "done thinking."
+                answer = re.sub(r'Thinking.*?done thinking\.', '', answer, flags=re.DOTALL).strip()
+                return answer if answer else None
+            except requests.exceptions.RequestException as e:
+                self.logger.warning(f"Ollama API error (attempt {attempt + 1}): {e}")
             except Exception as e:
                 self.logger.error(f"LLM error (attempt {attempt + 1}): {e}")
             if attempt < max_retries - 1:
