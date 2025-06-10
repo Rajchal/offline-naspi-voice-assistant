@@ -427,7 +427,7 @@ class VoiceAssistant:
                 self.audio_stream.stop_stream()
             clean_text = text.replace('\n', ' ').strip()[:500]
             clean_text = clean_text.encode('ascii', errors='ignore').decode('ascii')
-            cmd = ['espeak', '-s', '100', '-v', 'en', clean_text]
+            cmd = ['espeak', '-s', '120', '-v', 'en', clean_text]
             result = subprocess.run(
                 cmd,
                 capture_output=True,
