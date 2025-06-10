@@ -373,7 +373,7 @@ class VoiceAssistant:
             else:
                 self.logger.error(f"Whisper error: {result.stderr}")
             print(txt_file)
-            return f'command.wav.txt'.read_text().strip() if txt_file.exists() else None
+            return f'command.wav.txt'.read_text().strip()
 
         except subprocess.TimeoutExpired:
             raise TranscriptionError("Transcription timed out")
