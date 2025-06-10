@@ -393,7 +393,7 @@ class VoiceAssistant:
                 OLLAMA_MODEL = "qwen3:0.6b"
                 payload = {
                     "model": OLLAMA_MODEL,
-                    "prompt": question,
+                    "prompt": f'/no_think {question}',
                     "num_predict": 50,  # shorter, faster
                     "stream": False
                 }
