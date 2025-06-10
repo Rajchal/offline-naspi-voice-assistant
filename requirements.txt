@@ -1,0 +1,6 @@
+pyaudio
+pvporcupine
+whisper-cpp-python
+ollama
+pyttsx3
+

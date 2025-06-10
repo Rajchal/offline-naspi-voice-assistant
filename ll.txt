@@ -1,0 +1,35 @@
+   def _transcribe_audio(self, audio_file: str) -> Optional[str]:
+        """Transcribe audio using Whisper with error handling"""
+        try:
+            if not Path(audio_file).exists():
+                raise TranscriptionError(f"Audio file not found: {audio_file}")
+            cmd = [
+                self.whisper_path,
+                '-m', self.whisper_model,
+                '-f', audio_file,
+                '--output-txt',
+                '--no-prints'
+            ]
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=self.whisper_config.timeout
+            )
+            if result.returncode == 0:
+                txt_file = Path(audio_file).with_suffix('.txt')
+                if txt_file.exists():
+                    try:
+                        transcription = txt_file.read_text().strip()
+                        txt_file.unlink()
+                        return transcription if transcription else None
+                    except Exception as e:
+                        self.logger.error(f"Error reading transcription file: {e}")
+                else:
+                    self.logger.error(f"Whisper error: {result.stderr}")
+                return None
+        except subprocess.TimeoutExpired:
+            raise TranscriptionError("Transcription timed out")
+        except Exception as e:
+            raise TranscriptionError(f"Transcription failed: {e}")
+

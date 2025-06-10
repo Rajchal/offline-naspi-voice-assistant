@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""
+Optimized Raspberry Pi Offline Voice Assistant
+Uses direct library integrations for performance and a multi-threaded,
+event-driven architecture for responsiveness.
+"""
+
+import os
+import sys
+import struct
+import time
+import signal
+import threading
+import logging
+import configparser
+import wave
+from pathlib import Path
+from typing import Optional
+
+# Gracefully handle missing dependencies
+try:
+    import pyaudio
+    import pvporcupine
+    import whisper
+    import ollama
+    import pyttsx3
+except ImportError as e:
+    print(f"Missing required dependencies: {e}")
+    print("Please install them with: pip3 install -r requirements.txt")
+    sys.exit(1)
+
+
+class VoiceAssistant:
+    """
+    An optimized, multi-threaded voice assistant.
+    """
+
+    def __init__(self, config_path: str = 'config.ini'):
+        self._setup_logging()
+        self.logger.info("Booting up Optimized Voice Assistant...")
+
+        # Core components
+        self.config = self._load_config(config_path)
+        self.porcupine = None
+        self.pa = None
+        self.audio_stream = None
+        self.whisper_model = None
+        self.tts_engine = None
+
+        # State management
+        self.is_running = threading.Event()
+        self.is_running.set()
+        self.is_processing = threading.Lock() # Ensures only one command is handled at a time
+        
+        # Initialization
+        try:
+            self._initialize_components()
+            self.logger.info("All components initialized successfully.")
+        except Exception as e:
+            self.logger.critical(f"Fatal initialization error: {e}", exc_info=True)
+            self.cleanup()
+            sys.exit(1)
+
+    def _setup_logging(self):
+        """Configures professional logging."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.StreamHandler(sys.stdout),
+                logging.FileHandler('assistant.log', mode='a')
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def _load_config(self, config_path: str) -> configparser.ConfigParser:
+        """Loads configuration from an INI file."""
+        if not Path(config_path).exists():
+            self.logger.error(f"Configuration file not found at {config_path}")
+            raise FileNotFoundError(f"Missing {config_path}")
+        config = configparser.ConfigParser()
+        config.read(config_path)
+        return config
+
+    def _initialize_components(self):
+        """Initializes all necessary hardware and software components."""
+        self.logger.info("Initializing Text-to-Speech engine...")
+        self.tts_engine = pyttsx3.init()
+        self.tts_engine.setProperty('rate', self.config.getint('TTS', 'rate', fallback=150))
+        self.tts_engine.setProperty('volume', self.config.getfloat('TTS', 'volume', fallback=1.0))
+
+        self.logger.info("Initializing Whisper model (this may take a moment)...")
+        whisper_model_path = self.config.get('Whisper', 'model_path')
+        if not Path(whisper_model_path).exists():
+            raise FileNotFoundError(f"Whisper model not found at: {whisper_model_path}")
+        self.whisper_model = whisper.Whisper(
+            model_path=whisper_model_path,
+            n_threads=self.config.getint('Whisper', 'n_threads', fallback=4)
+        )
+        self.logger.info("Whisper model loaded.")
+
+        self.logger.info("Initializing Porcupine hotword engine...")
+        porcupine_config = self.config['Porcupine']
+        keyword_path = porcupine_config['keyword_path']
+        if not Path(keyword_path).exists():
+            raise FileNotFoundError(f"Porcupine keyword file not found: {keyword_path}")
+        self.porcupine = pvporcupine.create(
+            access_key=porcupine_config['access_key'],
+            keyword_paths=[keyword_path],
+            sensitivities=[float(porcupine_config['sensitivity'])]
+        )
+
+        self.logger.info("Initializing audio system (PyAudio)...")
+        self.pa = pyaudio.PyAudio()
+        self.audio_stream = self.pa.open(
+            rate=self.porcupine.sample_rate,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=self.porcupine.frame_length,
+            input_device_index=self.config.getint('Audio', 'input_device_index', fallback=None)
+        )
+
+    def _speak(self, text: str):
+        """Speaks the given text using the initialized TTS engine."""
+        self.logger.info(f"Speaking: {text}")
+        try:
+            self.tts_engine.say(text)
+            self.tts_engine.runAndWait()
+        except Exception as e:
+            self.logger.error(f"TTS Error: {e}")
+
+    def _play_sound(self, sound_path: str):
+        """Plays a WAV file for audio cues."""
+        path = Path(sound_path)
+        if not path.exists():
+            self.logger.warning(f"Audio cue not found: {sound_path}")
+            return
+        try:
+            with wave.open(str(path), 'rb') as wf:
+                stream = self.pa.open(
+                    format=self.pa.get_format_from_width(wf.getsampwidth()),
+                    channels=wf.getnchannels(),
+                    rate=wf.getframerate(),
+                    output=True
+                )
+                data = wf.readframes(1024)
+                while data:
+                    stream.write(data)
+                    data = wf.readframes(1024)
+                stream.stop_stream()
+                stream.close()
+        except Exception as e:
+            self.logger.error(f"Failed to play sound {sound_path}: {e}")
+
+    def _record_command_with_silence_detection(self) -> Optional[str]:
+        """Records audio from the stream until silence is detected."""
+        self.audio_stream.stop_stream() # Temporarily stop hotword stream
+
+        # Use a separate stream for flexible recording
+        record_stream = self.pa.open(
+            rate=self.config.getint('Audio', 'sample_rate'),
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=1024,
+            input_device_index=self.config.getint('Audio', 'input_device_index', fallback=None)
+        )
+        
+        self.logger.info("Listening for command...")
+        self._play_sound(self.config.get('Audio', 'start_sound_path'))
+
+        frames = []
+        silence_counter = 0
+        silence_limit = int(self.config.getfloat('Audio', 'silence_duration') * self.config.getint('Audio', 'sample_rate') / 1024)
+        silence_threshold = self.config.getint('Audio', 'silence_threshold')
+
+        while self.is_running.is_set():
+            try:
+                data = record_stream.read(1024)
+                frames.append(data)
+                
+                # Simple energy-based silence detection
+                rms = max(struct.unpack('h' * 1024, data))
+                if rms < silence_threshold:
+                    silence_counter += 1
+                else:
+                    silence_counter = 0
+
+                if silence_counter > silence_limit:
+                    self.logger.info("Silence detected, ending recording.")
+                    break
+            except IOError as e:
+                self.logger.error(f"Recording error: {e}")
+                return None
+
+        self._play_sound(self.config.get('Audio', 'end_sound_path'))
+        record_stream.stop_stream()
+        record_stream.close()
+
+        # Save the recording to a temporary WAV file
+        temp_wav_file = "command.wav"
+        with wave.open(temp_wav_file, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(self.pa.get_sample_size(pyaudio.paInt16))
+            wf.setframerate(self.config.getint('Audio', 'sample_rate'))
+            wf.writeframes(b''.join(frames))
+        
+        self.audio_stream.start_stream() # Resume hotword stream
+        return temp_wav_file
+
+    def _process_command_thread(self):
+        """The main logic for handling a voice command in a separate thread."""
+        with self.is_processing:
+            try:
+                # 1. Record audio
+                audio_file = self._record_command_with_silence_detection()
+                if not audio_file:
+                    self._speak("I'm sorry, I had trouble recording.")
+                    return
+
+                # 2. Transcribe audio to text
+                self._speak("Processing.")
+                self.logger.info(f"Transcribing {audio_file}...")
+                result = self.whisper_model.transcribe(audio_file)
+                transcription = result['text'].strip()
+                self.logger.info(f"Transcription: '{transcription}'")
+                
+                # Cleanup audio file
+                Path(audio_file).unlink(missing_ok=True)
+
+                if not transcription or len(transcription) < 3:
+                    self._speak("I didn't quite catch that. Please try again.")
+                    return
+
+                # 3. Get response from LLM
+                self._speak("Thinking.")
+                self.logger.info("Querying Ollama...")
+                response = ollama.chat(
+                    model=self.config.get('Ollama', 'model'),
+                    messages=[{'role': 'user', 'content': transcription}],
+                    options={'num_ctx': 2048} # Context window size
+                )
+                llm_response = response['message']['content'].strip()
+                
+                # 4. Speak the response
+                if llm_response:
+                    self._speak(llm_response)
+                else:
+                    self._speak("I'm sorry, I couldn't come up with a response.")
+
+            except Exception as e:
+                self.logger.error(f"Error in command processing thread: {e}", exc_info=True)
+                self._speak("I encountered an unexpected error. Please check the logs.")
+
+    def run(self):
+        """Main loop to listen for the hotword."""
+        self.wake_word = self.config.get('Porcupine', 'keyword_path').split('/')[-1].split('_')[0]
+        print("=" * 60)
+        print("🤖 OPTIMIZED RASPBERRY PI VOICE ASSISTANT")
+        print(f"   Wake Word: '{self.wake_word}'")
+        print("   Press Ctrl+C to exit.")
+        print("=" * 60)
+
+        try:
+            while self.is_running.is_set():
+                pcm = self.audio_stream.read(self.porcupine.frame_length)
+                pcm = struct.unpack_from("h" * self.porcupine.frame_length, pcm)
+                
+                if self.porcupine.process(pcm) >= 0:
+                    self.logger.info(f"Wake word '{self.wake_word}' detected!")
+                    if not self.is_processing.locked():
+                        # Start processing in a new thread to not block listening
+                        threading.Thread(target=self._process_command_thread).start()
+                    else:
+                        self.logger.info("Already processing a command, ignoring new wake word.")
+        except KeyboardInterrupt:
+            self.logger.info("Keyboard interrupt received. Shutting down...")
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        """Cleans up all resources."""
+        self.logger.info("Cleaning up resources...")
+        self.is_running.clear()
+
+        if self.porcupine:
+            self.porcupine.delete()
+        if self.audio_stream:
+            self.audio_stream.stop_stream()
+            self.audio_stream.close()
+        if self.pa:
+            self.pa.terminate()
+
+        # Clean up temporary files
+        Path("command.wav").unlink(missing_ok=True)
+        
+        self.logger.info("Cleanup complete. Goodbye!")
+
+def main():
+    assistant = None
+    try:
+        assistant = VoiceAssistant()
+        # Set up signal handler for graceful shutdown
+        signal.signal(signal.SIGINT, lambda sig, frame: assistant.cleanup())
+        signal.signal(signal.SIGTERM, lambda sig, frame: assistant.cleanup())
+        assistant.run()
+    except Exception as e:
+        logging.critical(f"Failed to start assistant: {e}", exc_info=True)
+        if assistant:
+            assistant.cleanup()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
