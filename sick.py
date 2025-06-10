@@ -362,7 +362,7 @@ class VoiceAssistant:
                 text=True,
                 timeout=self.whisper_config.timeout
             )
-            txt_file = Path(audio_file).with_suffix('.txt')
+            txt_file = Path('command.wav').with_suffix('.txt')
             if txt_file.exists():
                 try:
                     transcription = txt_file.read_text().strip()
@@ -373,7 +373,7 @@ class VoiceAssistant:
             else:
                 self.logger.error(f"Whisper error: {result.stderr}")
             print(txt_file)
-            return f'command.wav.txt'.read_text().strip()
+            return txt_file.read_text().strip() if txt_file.exists() else None
 
         except subprocess.TimeoutExpired:
             raise TranscriptionError("Transcription timed out")
