@@ -362,7 +362,9 @@ class VoiceAssistant:
                 text=True,
                 timeout=self.whisper_config.timeout
             )
-            txt_file = Path('./command.wav').with_suffix('.txt')
+            # ...existing code...
+            txt_file = Path(audio_file + '.txt')
+# ...existing code...
             if txt_file.exists():
                 try:
                     transcription = txt_file.read_text().strip()
